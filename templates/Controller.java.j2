@@ -1,0 +1,16 @@
+package {{ package }};
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class Controller {
+
+    {% for path, ops in endpoints.items() %}
+    {% for method, details in ops.items() %}
+    @{{ method.upper() }}Mapping("{{ path }}")
+    public String {{ details['operationId'] | default('handler_' ~ loop.index) }}() {
+        return "This is {{ path }}";
+    }
+    {% endfor %}
+    {% endfor %}
+}

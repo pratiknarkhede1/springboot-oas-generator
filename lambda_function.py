@@ -1,46 +1,65 @@
-import os
-from prance import ResolvingParser
-from jinja2 import Environment, FileSystemLoader
+import boto3
+import json
 
-BASE_DIR = os.path.dirname(__file__)
-TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
-OUTPUT_DIR = os.path.join(BASE_DIR, 'output')
-PACKAGE_PATH = os.path.join('com', 'example')
-JAVA_OUT_DIR = os.path.join(OUTPUT_DIR, 'src', 'main', 'java', PACKAGE_PATH)
-RES_OUT_DIR = os.path.join(OUTPUT_DIR, 'src', 'main', 'resources')
+# Initialize Bedrock Agent Runtime client
+client = boto3.client("bedrock-agent-runtime", region_name="us-east-1")
 
-def parse_openapi_spec(spec_path):
-    parser = ResolvingParser(spec_path)
-    return parser.specification
+AGENT_ID = "your-agent-id"
+AGENT_ALIAS_ID = "your-agent-alias-id"
 
-def write_file(path, content):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
+def invoke_agent(wsdl_content: str):
+    response = client.invoke_agent(
+        agentId=AGENT_ID,
+        agentAliasId=AGENT_ALIAS_ID,
+        sessionId="wsdl-to-oas-session",
+        inputText=f"Convert the following WSDL into OpenAPI 3.0 JSON:\n\n{wsdl_content}"
+    )
+    
+    # Collect streaming output
+    output_text = ""
+    for event in response["completion"]:
+        if "chunk" in event:
+            output_text += event["chunk"]["bytes"].decode("utf-8")
+    
+    return output_text
 
-def generate_code(spec):
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+def get_complete_oas(wsdl_content: str):
+    raw_output = invoke_agent(wsdl_content)
+    
+    # Ensure JSON is complete
+    while raw_output.count("{") > raw_output.count("}"):
+        continuation = invoke_agent("continue JSON")
+        raw_output += continuation
+    
+    # Validate JSON
+    try:
+        spec = json.loads(raw_output)
+    except json.JSONDecodeError as e:
+        print("❌ JSON parse failed:", e)
+        print("Partial output:\n", raw_output[:500])
+        raise
+    
+    return spec
 
-    # Application.java
-    app_template = env.get_template("Application.java.j2")
-    app_code = app_template.render(package="com.example", spec=spec)
-    write_file(os.path.join(JAVA_OUT_DIR, "Application.java"), app_code)
+if __name__ == "__main__":
+    with open("example.wsdl", "r") as f:
+        wsdl_content = f.read()
+    
+    oas = get_complete_oas(wsdl_content)
+    
+    with open("oas3.json", "w") as f:
+        json.dump(oas, f, indent=2)
+    
+    print("✅ OpenAPI 3.0 spec generated: oas3.json")
 
-    # Controller.java
-    ctrl_template = env.get_template("Controller.java.j2")
-    ctrl_code = ctrl_template.render(package="com.example", endpoints=spec["paths"])
-    write_file(os.path.join(JAVA_OUT_DIR, "Controller.java"), ctrl_code)
 
-    # pom.xml
-    pom_template = env.get_template("pom.xml.j2")
-    pom_code = pom_template.render()
-    write_file(os.path.join(OUTPUT_DIR, "pom.xml"), pom_code)
+You are a converter service.
 
-    # application.properties
-    write_file(os.path.join(RES_OUT_DIR, "application.properties"), "")
+Input: A WSDL specification.
+Output: A complete OpenAPI 3.0 specification in **valid JSON** format, ready to use.
 
-def lambda_handler(event=None, context=None):
-    spec_path = os.path.join(BASE_DIR, 'specs', 'api.yaml')
-    spec = parse_openapi_spec(spec_path)
-    generate_code(spec)
-    return {"status": "Spring Boot project generated"}
+Rules:
+- Respond ONLY with a single JSON object (no explanations, no markdown, no comments).
+- Always produce the full specification in one response if possible.
+- If response is too large, continue JSON exactly where it left off, until the object closes properly.
+- Always follow company API standards from the attached Knowledge Base.

@@ -1,0 +1,93 @@
+openapi: 3.0.3
+info:
+  title: Internal Users Service
+  version: 1.0.0
+  description: Internal microservice for user data
+
+servers:
+  - url: http://users-service:8081
+
+paths:
+  /internal/users:
+    get:
+      summary: Get users from database
+      operationId: getUsers
+      parameters:
+        - name: offset
+          in: query
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserRecord'
+    
+    post:
+      summary: Create user in database
+      operationId: createUser
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewUser'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRecord'
+
+  /internal/users/{id}:
+    get:
+      summary: Get user by ID
+      operationId: getUserById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRecord'
+
+components:
+  schemas:
+    UserRecord:
+      type: object
+      properties:
+        userId:
+          type: string
+        emailAddress:
+          type: string
+        first:
+          type: string
+        last:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+    
+    NewUser:
+      type: object
+      properties:
+        emailAddress:
+          type: string
+        first:
+          type: string
+        last:
+          type: string

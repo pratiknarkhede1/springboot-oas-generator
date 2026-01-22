@@ -21,19 +21,61 @@ logger = logging.getLogger(__name__)
 class OpenAPIGenerator:
     """Wrapper for OpenAPI Generator CLI"""
     
-    def __init__(self):
+    def __init__(self, custom_jar_path=None):
+        """
+        Initialize OpenAPI Generator
+        
+        Args:
+            custom_jar_path: Path to openapi-generator-cli.jar file
+                           e.g., "C:/openapi-generator/openapi-generator-cli.jar"
+        """
+        self.custom_jar_path = custom_jar_path
+        self.command = self._detect_command()
         self._verify_installation()
     
+    def _detect_command(self):
+        """Detect which command to use for OpenAPI Generator"""
+        
+        # If custom JAR path provided, use that
+        if self.custom_jar_path and os.path.exists(self.custom_jar_path):
+            logger.info(f"Using custom OpenAPI Generator JAR: {self.custom_jar_path}")
+            return ["java", "-jar", self.custom_jar_path]
+        
+        # Try to find in common Windows locations
+        common_paths = [
+            "C:/openapi-generator/openapi-generator-cli.jar",
+            "C:/Program Files/openapi-generator/openapi-generator-cli.jar",
+            "C:/tools/openapi-generator/openapi-generator-cli.jar",
+            os.path.expanduser("~/openapi-generator/openapi-generator-cli.jar")
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                logger.info(f"Found OpenAPI Generator JAR at: {path}")
+                return ["java", "-jar", path]
+        
+        # Fall back to CLI command
+        logger.info("Using openapi-generator-cli command")
+        return ["openapi-generator-cli"]
+    
     def _verify_installation(self):
-        """Check if openapi-generator-cli is installed"""
+        """Check if openapi-generator is accessible"""
         try:
-            subprocess.run(
-                ["openapi-generator-cli", "version"],
+            cmd = self.command + ["version"]
+            result = subprocess.run(
+                cmd,
                 check=True,
-                capture_output=True
+                capture_output=True,
+                text=True
             )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logger.error("openapi-generator-cli not found. Install it via npm or brew")
+            logger.info(f"OpenAPI Generator version: {result.stdout.strip()}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.error("OpenAPI Generator not found!")
+            logger.error("Please either:")
+            logger.error("  1. Install via npm: npm install @openapitools/openapi-generator-cli -g")
+            logger.error("  2. Install via brew: brew install openapi-generator")
+            logger.error("  3. Download JAR and set custom_jar_path")
+            logger.error("  Download from: https://github.com/OpenAPITools/openapi-generator")
             sys.exit(1)
     
     def generate_server(self, spec_path: str, output_dir: str, package_name: str) -> str:
@@ -61,8 +103,8 @@ class OpenAPIGenerator:
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
         
-        cmd = [
-            "openapi-generator-cli", "generate",
+        cmd = self.command + [
+            "generate",
             "-i", spec_path,
             "-g", "spring",
             "-o", output_dir,
@@ -107,8 +149,8 @@ class OpenAPIGenerator:
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
         
-        cmd = [
-            "openapi-generator-cli", "generate",
+        cmd = self.command + [
+            "generate",
             "-i", spec_path,
             "-g", "java",
             "-o", output_dir,
@@ -506,9 +548,17 @@ class SpecAnalyzer:
 class ServiceGenerator:
     """Main orchestrator for service generation"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], openapi_jar_path: str = None):
+        """
+        Initialize Service Generator
+        
+        Args:
+            config: Configuration dictionary
+            openapi_jar_path: Optional path to openapi-generator-cli.jar
+                            e.g., "C:/openapi-generator/openapi-generator-cli.jar"
+        """
         self.config = config
-        self.openapi_gen = OpenAPIGenerator()
+        self.openapi_gen = OpenAPIGenerator(custom_jar_path=openapi_jar_path)
         self.llm_service = LLMService(
             bedrock_region=config['bedrock']['region'],
             model_id=config['bedrock']['model_id']
@@ -649,7 +699,7 @@ class ServiceGenerator:
 def main():
     """Main entry point"""
     
-    # Example configuration
+    # Configuration
     config = {
         'package_name': 'com.example.generated',
         'bedrock': {
@@ -658,7 +708,22 @@ def main():
         }
     }
     
-    generator = ServiceGenerator(config)
+    # IMPORTANT: Set this to your OpenAPI Generator JAR location
+    # Examples:
+    #   Windows: "C:/openapi-generator/openapi-generator-cli.jar"
+    #   Windows alt: "C:/tools/openapi-generator-cli-7.2.0.jar"
+    #   Leave as None to use system-installed openapi-generator-cli
+    
+    OPENAPI_JAR_PATH = "C:/openapi-generator/openapi-generator-cli.jar"
+    
+    # Check if the JAR exists, if not, prompt user
+    if OPENAPI_JAR_PATH and not os.path.exists(OPENAPI_JAR_PATH):
+        logger.warning(f"OpenAPI Generator JAR not found at: {OPENAPI_JAR_PATH}")
+        logger.warning("Please update OPENAPI_JAR_PATH in the script or set it to None")
+        logger.warning("Attempting to use system-installed openapi-generator-cli...")
+        OPENAPI_JAR_PATH = None
+    
+    generator = ServiceGenerator(config, openapi_jar_path=OPENAPI_JAR_PATH)
     
     # Example usage
     generator.generate(

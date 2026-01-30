@@ -42,8 +42,13 @@ import json
 import re
 import pathlib
 import textwrap
+import urllib.request
 
 # ================= CONFIG =================
+
+GENERATOR_VERSION = "7.6.0"
+GENERATOR_JAR = f"openapi-generator-cli-{GENERATOR_VERSION}.jar"
+GENERATOR_URL = f"https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/{GENERATOR_VERSION}/{GENERATOR_JAR}"
 
 EXTERNAL_OAS = "external.yaml"
 INTERNAL_OAS = "internal.yaml"
@@ -63,11 +68,16 @@ def load_yaml(path):
     with open(path) as f:
         return yaml.safe_load(f)
 
+def ensure_generator():
+    if not pathlib.Path(GENERATOR_JAR).exists():
+        print("⬇ Downloading OpenAPI Generator JAR...")
+        urllib.request.urlretrieve(GENERATOR_URL, GENERATOR_JAR)
+
 # ================= STEP 1: SPRING APP =================
 
 def generate_spring():
     run(f"""
-openapi-generator generate \
+java -jar {GENERATOR_JAR} generate \
   -i {EXTERNAL_OAS} \
   -g spring \
   -o {APP_DIR} \
@@ -78,16 +88,14 @@ openapi-generator generate \
 
 def generate_internal_client():
     run(f"""
-openapi-generator generate \
+java -jar {GENERATOR_JAR} generate \
   -i {INTERNAL_OAS} \
   -g java \
   -o /tmp/internal \
   --additional-properties=library=webclient,useJakartaEe=true
 """)
 
-    run(f"""
-cp -r /tmp/internal/src/main/java/* {APP_DIR}/src/main/java/
-""")
+    run(f"cp -r /tmp/internal/src/main/java/* {APP_DIR}/src/main/java/")
 
 # ================= STEP 3: CONFIG =================
 
@@ -159,6 +167,8 @@ def merge_method(java_file, method, body):
 # ================= MAIN =================
 
 def main():
+    ensure_generator()
+
     generate_spring()
     generate_internal_client()
     add_webclient_config()
@@ -192,3 +202,4 @@ Rules:
 
 if __name__ == "__main__":
     main()
+

@@ -5,6 +5,18 @@ End-to-end Spring Boot code generator:
 - Internal OAS → REST client
 - Mapping-driven LLM logic generation
 - Safe method-body merge
+
+endpoints:
+  getOrder:
+    external:
+      response: OrderResponse
+      params:
+        - name: id
+          type: String
+    internal:
+      client: internalOrdersApi
+      method: getInternalOrder
+
 """
 
 import os

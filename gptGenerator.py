@@ -5,6 +5,22 @@ End-to-end Spring Boot code generator:
 - Internal OAS → REST client
 - Mapping-driven LLM logic generation
 - Safe method-body merge
+External.ymal:
+
+paths:
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      responses:
+        "200":
+          description: ok
+Internal:
+paths:
+  /internal/orders/{id}:
+    get:
+      operationId: getInternalOrder
+
+mapping.yaml
 
 endpoints:
   getOrder:

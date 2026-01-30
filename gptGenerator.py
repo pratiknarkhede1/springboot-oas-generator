@@ -18,184 +18,161 @@ endpoints:
       method: getInternalOrder
 
 """
+#!/usr/bin/env python3
 
-import os
-import re
+import subprocess
 import yaml
 import json
-import subprocess
-import tempfile
+import re
 import pathlib
 import textwrap
-import sys
 
-# =========================
-# CONFIG
-# =========================
+# ================= CONFIG =================
 
 EXTERNAL_OAS = "external.yaml"
 INTERNAL_OAS = "internal.yaml"
 MAPPING_FILE = "mapping.yaml"
+APP_DIR = "app"
 
-OUTPUT_DIR = "generated-app"
-INTERNAL_CLIENT_DIR = "internal-client"
+LITELLM_URL = "http://localhost:4000/v1/chat/completions"
+MODEL = "bedrock/nova-lite"
 
-JAVA_VERSION = "21"
-
-BEDROCK_MODEL = "bedrock/nova-lite"
-LITELLM_ENDPOINT = "http://localhost:4000/v1/chat/completions"
-
-# =========================
-# UTILS
-# =========================
+# ================= UTILS =================
 
 def run(cmd):
-    print(f"▶ {cmd}")
+    print(f"\n▶ {cmd}")
     subprocess.run(cmd, shell=True, check=True)
 
 def load_yaml(path):
     with open(path) as f:
         return yaml.safe_load(f)
 
-# =========================
-# STEP 1 — Generate External Wrapper
-# =========================
+# ================= STEP 1: SPRING APP =================
 
-def generate_external():
+def generate_spring():
     run(f"""
-    openapi-generator generate \
-      -i {EXTERNAL_OAS} \
-      -g spring \
-      -o {OUTPUT_DIR} \
-      --additional-properties=delegatePattern=true,java21=true
-    """)
+openapi-generator generate \
+  -i {EXTERNAL_OAS} \
+  -g spring \
+  -o {APP_DIR} \
+  --additional-properties=delegatePattern=true,java21=true,interfaceOnly=false
+""")
 
-# =========================
-# STEP 2 — Generate Internal REST Client
-# =========================
+# ================= STEP 2: INTERNAL CLIENT =================
 
-def generate_internal():
+def generate_internal_client():
     run(f"""
-    openapi-generator generate \
-      -i {INTERNAL_OAS} \
-      -g java \
-      -o {INTERNAL_CLIENT_DIR} \
-      --additional-properties=library=webclient,useJakartaEe=true
-    """)
+openapi-generator generate \
+  -i {INTERNAL_OAS} \
+  -g java \
+  -o /tmp/internal \
+  --additional-properties=library=webclient,useJakartaEe=true
+""")
 
-# =========================
-# STEP 3 — Load Mapping
-# =========================
+    run(f"""
+cp -r /tmp/internal/src/main/java/* {APP_DIR}/src/main/java/
+""")
 
-def load_mapping():
-    return load_yaml(MAPPING_FILE)["endpoints"]
+# ================= STEP 3: CONFIG =================
 
-# =========================
-# STEP 4 — Find DelegateImpl
-# =========================
+def add_webclient_config():
+    cfg = pathlib.Path(f"{APP_DIR}/src/main/java/config/WebClientConfig.java")
+    cfg.parent.mkdir(parents=True, exist_ok=True)
 
-def find_delegate_impl():
-    base = pathlib.Path(OUTPUT_DIR)
-    for p in base.rglob("*DelegateImpl.java"):
-        return p
-    raise Exception("DelegateImpl not found")
+    cfg.write_text("""
+package config;
 
-# =========================
-# STEP 5 — LLM CALL
-# =========================
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.client.WebClient;
 
-def generate_method_body(prompt):
+@Configuration
+public class WebClientConfig {
+
+    @Bean
+    public WebClient webClient() {
+        return WebClient.builder().build();
+    }
+}
+""")
+
+# ================= STEP 4: LLM =================
+
+def llm(prompt):
     payload = {
-        "model": BEDROCK_MODEL,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "model": MODEL,
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": 0
     }
 
-    result = subprocess.run(
-        [
-            "curl", "-s",
-            "-X", "POST",
-            LITELLM_ENDPOINT,
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(payload)
-        ],
+    res = subprocess.run(
+        ["curl", "-s", "-X", "POST", LITELLM_URL,
+         "-H", "Content-Type: application/json",
+         "-d", json.dumps(payload)],
         capture_output=True,
-        text=True,
-        check=True
+        text=True
     )
 
-    content = json.loads(result.stdout)
-    return content["choices"][0]["message"]["content"]
+    return json.loads(res.stdout)["choices"][0]["message"]["content"]
 
-# =========================
-# STEP 6 — Merge Method Body
-# =========================
+# ================= STEP 5: MERGE =================
 
-def merge_logic(java_file, method_name, new_body):
+def merge_method(java_file, method, body):
     src = java_file.read_text()
 
     pattern = re.compile(
-        rf"(public .* {method_name}\(.*?\)\s*\{{)(.*?)(\n\s*\}})",
+        rf"(public .* {method}\(.*?\)\s*\{{)(.*?)(\n\s*\}})",
         re.S
     )
 
-    match = pattern.search(src)
-    if not match:
-        raise Exception(f"Method {method_name} not found")
+    m = pattern.search(src)
+    if not m:
+        raise RuntimeError(f"{method} not found")
 
-    merged = (
-        match.group(1)
+    new_src = (
+        src[:m.start()]
+        + m.group(1)
         + "\n"
-        + textwrap.indent(new_body.strip(), " " * 8)
-        + match.group(3)
+        + textwrap.indent(body.strip(), " " * 8)
+        + m.group(3)
+        + src[m.end():]
     )
 
-    src = src[:match.start()] + merged + src[match.end():]
-    java_file.write_text(src)
+    java_file.write_text(new_src)
 
-# =========================
-# STEP 7 — MAIN
-# =========================
+# ================= MAIN =================
 
 def main():
-    print("\n=== STEP 1: External API ===")
-    generate_external()
+    generate_spring()
+    generate_internal_client()
+    add_webclient_config()
 
-    print("\n=== STEP 2: Internal Client ===")
-    generate_internal()
+    mapping = load_yaml(MAPPING_FILE)["endpoints"]
 
-    print("\n=== STEP 3: Mapping ===")
-    mapping = load_mapping()
+    delegate = next(pathlib.Path(APP_DIR).rglob("*DelegateImpl.java"))
 
-    delegate = find_delegate_impl()
-    print(f"Using delegate: {delegate}")
-
-    for name, cfg in mapping.items():
-        print(f"\n=== Generating logic for {name} ===")
-
+    for method, cfg in mapping.items():
         prompt = f"""
-Generate ONLY the Java method body.
+Generate Java method body ONLY.
 
-External method:
-ResponseEntity<{cfg['external']['response']}> {name}({', '.join(p['type'] + ' ' + p['name'] for p in cfg['external']['params'])})
+External:
+ResponseEntity<{cfg['external']['response']}> {method}(String id)
 
-Internal REST call:
-{cfg['internal']['client']}.{cfg['internal']['method']}({', '.join(p['name'] for p in cfg['external']['params'])})
+Internal:
+{cfg['internal']['client']}.{cfg['internal']['method']}(id)
 
 Rules:
-- No imports
-- No annotations
-- Catch WebClientResponseException.NotFound → return ResponseEntity.notFound().build()
-- Map internal response to external response
+- Must return ResponseEntity
+- Catch WebClientResponseException.NotFound
+- No imports, annotations, class definitions
 """
 
-        body = generate_method_body(prompt)
-        merge_logic(delegate, name, body)
+        body = llm(prompt)
+        merge_method(delegate, method, body)
 
-    print("\n=== DONE ===")
-    print("Run: mvn clean verify")
+    print("\n✅ DONE")
+    print("Run:")
+    print(f"cd {APP_DIR} && mvn clean spring-boot:run")
 
 if __name__ == "__main__":
     main()
